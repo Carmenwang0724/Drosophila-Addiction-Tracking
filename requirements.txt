@@ -1,0 +1,9 @@
+numpy
+scipy
+matplotlib
+seaborn
+pandas
+h5py
+torch
+sleap-io
+sleap-nn

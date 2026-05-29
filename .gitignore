@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Large data files (regenerate with src/preprocessing/)
+*.npz
+*.slp
+*.h5
+
+# Generated video outputs
+output/
+*.mp4
+
+# IDE
+.vscode/
+.idea/

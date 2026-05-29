@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Single Vortex OMR (10 Min)</title>
+<style>
+  *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%; height:100%; overflow:hidden;
+    background:#000; user-select:none; touch-action:none; font-family:monospace;
+  }
+  #c { display:block; position:fixed; inset:0; width:100%; height:100%; }
+  
+  #start-screen {
+    position:fixed; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; background:#020205; z-index:100; color:#fff;
+  }
+  .btn {
+    padding: 15px 40px; font-size:16px; font-weight:bold; letter-spacing:2px;
+    color:#fff; background:transparent; border: 1px solid #A000FF; cursor:pointer;
+    box-shadow: 0 0 15px rgba(160,0,255,0.3); border-radius: 4px; margin-top: 20px;
+  }
+  #end-screen {
+    display:none; position:fixed; inset:0; flex-direction:column;
+    align-items:center; justify-content:center; background:#000; z-index:100; color:#A000FF; font-size: 24px;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div id="start-screen">
+  <div style="text-align:center; line-height:2;">
+    <h1 style="color:#A000FF; letter-spacing:4px;">10-MIN VORTEX</h1>
+    <p>Target: iPad Pro (132 CSS PPI)</p>
+    <p>Diameter: 8.5cm (Positioned Left)</p>
+    <p>Motion: 8Hz Centripetal | Flicker: 10Hz</p>
+  </div>
+  <button class="btn" id="start-btn">▶ BEGIN EXPERIMENT</button>
+</div>
+
+<div id="end-screen">
+  <h2>■ 10 MINUTE EXPERIMENT COMPLETE</h2>
+</div>
+
+<script>
+'use strict';
+
+// ── 实验核心参数 ──────────────────────────────────────────
+const TOTAL_SEC    = 600;       // 总时长 10 分钟 (600秒)
+const SPEED_HZ     = 8;         // 旋转速度 8Hz
+const FLICKER_HZ   = 10;        // 闪烁频率 10Hz
+const SPIRAL_ARMS  = 8;         // 旋臂数量
+const SPIRAL_TURNS = 0.8;       // 螺旋扭曲圈数
+
+// ── ★ 尺寸与位置设置 ★ ────────────────────────────────────
+const PX_PER_CM = 51.9685;      // iPad Pro (264 PPI -> 132 CSS PPI)
+const HOLE_R_CM = 4.25;         // 半径 4.25cm (直径 8.5cm，比之前放大了)
+
+// 控制图案在屏幕上的位置 (0.0 到 1.0 之间)
+const POS_X_RATIO = 0.25;       // X轴位置：0.25 代表在屏幕左侧 1/4 处
+const POS_Y_RATIO = 0.50;       // Y轴位置：0.50 代表垂直居中
+
+const RED_CSS = 'rgb(255,0,0)';
+let W = 0, H = 0, R = 0;
+let spiralCanvas = null;
+let running = false, expDone = false;
+let startMs = 0;
+
+const canvas  = document.getElementById('c');
+const ctx     = canvas.getContext('2d');
+const startEl = document.getElementById('start-screen');
+const endEl   = document.getElementById('end-screen');
+
+// ── 1. 生成带透明间隙的洋红色螺旋 ─────────────────────────
+function generateSpiralCanvas(cssRadius, dpr) {
+  const physR = Math.ceil(cssRadius * dpr);
+  const size  = physR * 2;
+  const off   = document.createElement('canvas');
+  off.width = size; off.height = size;
+  const octx = off.getContext('2d');
+  const imgD = octx.createImageData(size, size);
+  const data = imgD.data;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = x - physR, dy = y - physR;
+      const r = Math.sqrt(dx*dx + dy*dy);
+      if (r > physR) continue;
+
+      const theta = Math.atan2(dy, dx);
+      // 数学公式：生成完美的阿基米德螺旋
+      const phase = SPIRAL_ARMS * (theta - Math.PI * 2 * SPIRAL_TURNS * (r / physR));
+
+      const i = (y * size + x) * 4;
+      if (Math.sin(phase) > 0) {
+        // 洋红色
+        data[i] = 160; data[i+1] = 0; data[i+2] = 255; data[i+3] = 255;
+      } else {
+        // 透明 (露出底部的纯红)
+        data[i] = 0; data[i+1] = 0; data[i+2] = 0; data[i+3] = 0;
+      }
+    }
+  }
+  octx.putImageData(imgD, 0, 0);
+  return off;
+}
+
+// ── 2. 屏幕尺寸初始化 ──────────────────────────────────────
+function onResize() {
+  const dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  R = HOLE_R_CM * PX_PER_CM; 
+  spiralCanvas = generateSpiralCanvas(R, dpr);
+}
+
+// ── 3. 核心 120Hz 渲染循环 ────────────────────────────────
+function drawFrame(nowMs) {
+  if (!running && !expDone) return;
+
+  const elapsed = (nowMs - startMs) * 1e-3;
+
+  // 10 分钟结束检测
+  if (elapsed >= TOTAL_SEC) {
+    running = false; expDone = true;
+    ctx.fillStyle = RED_CSS; ctx.fillRect(0, 0, W, H);
+    endEl.style.display = 'flex';
+    return;
+  }
+
+  // 背景永远是纯红色
+  ctx.fillStyle = RED_CSS;
+  ctx.fillRect(0, 0, W, H);
+
+  // 10Hz Flicker 逻辑 (方波：50ms 亮，50ms 暗)
+  const flickerPeriod = 1.0 / FLICKER_HZ;
+  const patternOn = (elapsed % flickerPeriod) < (flickerPeriod * 0.5);
+
+  if (patternOn) {
+    // 8Hz 旋转逻辑
+    const rotSpeed = SPEED_HZ * (Math.PI * 2 / SPIRAL_ARMS);
+    const angle = -1 * rotSpeed * elapsed; // -1 代表向心 (Centripetal)
+
+    // ★ 使用新的比例参数来确定圆心位置 ★
+    const cx = W * POS_X_RATIO;
+    const cy = H * POS_Y_RATIO;
+
+    ctx.save();
+    // 剪切出一个圆形的蒙版
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, 0, Math.PI * 2);
+    ctx.clip();
+
+    // 移动到指定的中心，旋转，贴上螺旋图
+    ctx.translate(cx, cy);
+    ctx.rotate(angle);
+    ctx.drawImage(spiralCanvas, -R, -R, R*2, R*2);
+    ctx.restore();
+  }
+
+  // 右上角暗红色全局计时器
+  ctx.save();
+  const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
+  const ss = String(Math.floor(elapsed % 60)).padStart(2, '0');
+  ctx.fillStyle = 'rgb(100, 0, 0)'; 
+  ctx.font = 'bold 30px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText(`${mm}:${ss} / 10:00`, W - 24, 40);
+  ctx.restore();
+}
+
+function loop(ts) {
+  drawFrame(ts);
+  requestAnimationFrame(loop);
+}
+
+// ── 4. 启动与事件监听 ─────────────────────────────────────
+function startExperiment() {
+  const el = document.documentElement;
+  const rfs = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (rfs) rfs.call(el).catch(()=>{});
+  
+  document.body.style.cursor = 'none';
+  startEl.style.display = 'none';
+  startMs = performance.now();
+  running = true;
+}
+
+document.getElementById('start-btn').addEventListener('click', startExperiment);
+document.getElementById('start-btn').addEventListener('touchend', (e)=>{ e.preventDefault(); startExperiment(); }, {passive:false});
+window.addEventListener('resize', onResize);
+
+// 阻止 iPad 滑动手势
+document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+
+onResize();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
